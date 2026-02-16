@@ -26,6 +26,7 @@ from .tense_modifier import Tense, apply_tense
 from .cluster_tagger import tag_regimes
 import sqlite3
 from pathlib import Path
+from typing import Set
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,44 @@ INTENT_TEMPLATES: Dict[str, GeometricIntent] = {
         noun_target=(0.55, 0.30, 0.55),
         tense=Tense.ACTIVE,
     ),
+}
+
+# Curated vocab per intent to force sensible selections when provided.
+CURATED_VOCAB: Dict[str, Dict[str, list[str]]] = {
+    "MOVE_UP": {
+        "nouns": ["ROPE", "BEAM", "BRIDGE", "TOWER", "WHEEL"],
+        "verbs": ["LIFT", "RAISE", "HOIST", "ASCEND", "PULL"],
+    },
+    "MOVE_DOWN": {
+        "nouns": ["ROPE", "BEAM", "STONE", "BLOCK", "WEIGHT"],
+        "verbs": ["DROP", "LOWER", "DESCEND", "DROP", "FALL"],
+    },
+    "FLOW_THROUGH": {
+        "nouns": ["PIPE", "VALVE", "WATER", "GLASS", "FRAME"],
+        "verbs": ["FLOW", "DRAIN", "POUR", "STREAM", "PASS"],
+    },
+    "IMPACT_STOP": {
+        "nouns": ["ROPE", "BEAM", "WALL", "BRIDGE", "BLOCK"],
+        "verbs": ["STOP", "CRASH", "BREAK", "HALT", "SLAM"],
+    },
+    "STABLE_REST": {
+        "nouns": ["BEAM", "BRIDGE", "STONE", "BLOCK", "MASS"],
+        "verbs": ["REST", "STAND", "SETTLE", "HOLD", "REMAIN"],
+    },
+    "ACTIVE_TRANSFER": {
+        "nouns": ["WHEEL", "PIPE", "ROPE", "GATE", "VALVE"],
+        "verbs": ["SEND", "TRANSFER", "MOVE", "PASS", "SHIFT"],
+    },
+}
+
+# Manual noun -> compatible verbs map as a fallback compatibility filter.
+COMPATIBILITY_MAP: Dict[str, Set[str]] = {
+    "ROPE": {"LIFT", "TUG", "PULL", "RAISE", "HOIST", "TIE", "DROP"},
+    "BEAM": {"SUPPORT", "CARRY", "BEND", "BREAK", "LOAD", "HOLD"},
+    "BRIDGE": {"SPAN", "SUPPORT", "CARRY", "CROSS", "HOLD"},
+    "WATER": {"FLOW", "POUR", "DRAIN", "STREAM", "PASS"},
+    "PIPE": {"FLOW", "DRAIN", "POUR", "PASS", "LEAK"},
+    "GLASS": {"BREAK", "SHATTER", "POUR", "REFLECT", "SWIM"},
 }
 
 
@@ -266,10 +305,11 @@ def build_sentence(
             conn = sqlite3.connect(str(db_path))
             cur = conn.cursor()
             cur.execute(
-                "SELECT definition FROM words WHERE word = ? AND synset_id LIKE '%.n.%'",
+                "SELECT definition, examples FROM words WHERE word = ? AND synset_id LIKE '%.n.%'",
                 (chosen_noun.upper(),),
             )
-            defs = " ".join((r[0] or "") for r in cur.fetchall()).lower()
+            rows = cur.fetchall()
+            defs = " ".join(((r[0] or "") + " " + (r[1] or "")) for r in rows).lower()
             conn.close()
         except Exception:
             return []
@@ -277,7 +317,18 @@ def build_sentence(
         if not defs:
             return []
 
-        compatible = [v for v in verbs_list if v.lower() in defs]
+        # match verbs appearing in definitions/examples OR lemma match in DB examples
+        compatible = []
+        for v in verbs_list:
+            lv = v.lower()
+            if lv in defs:
+                compatible.append(v)
+                continue
+            # also check if verb lemma appears as a standalone word in examples
+            if any(f" {lv} " in (r[1] or "").lower() for r in rows):
+                compatible.append(v)
+        # dedupe
+        compatible = list(dict.fromkeys(compatible))
         return compatible
 
     # If the noun is from DB, try to find compatible verbs and prefer them
@@ -292,6 +343,31 @@ def build_sentence(
             # update best_verb if different
             if chosen_v != best_verb[0]:
                 best_verb = (chosen_v, scored[0][1])
+    except Exception:
+        pass
+
+    # CURATED VOCAB: if the intent has a curated vocabulary, prefer it
+    curated = CURATED_VOCAB.get(intent_name)
+    if curated:
+        try:
+            noun_pool_cur = [n.upper() for n in curated.get("nouns", [])]
+            verb_pool_cur = [v.upper() for v in curated.get("verbs", [])]
+            best_verb = find_best_word(verb_pool_cur, intent.verb_target, top_n=1)[0]
+            best_noun = find_best_word(noun_pool_cur, intent.noun_target, top_n=1)[0]
+        except Exception:
+            pass
+
+    # Manual compatibility fallback: prefer verbs from COMPATIBILITY_MAP for the chosen noun
+    try:
+        noun_word = best_noun[0].upper()
+        compat_manual = COMPATIBILITY_MAP.get(noun_word, set())
+        if compat_manual:
+            candidates = [v for v in verb_pool if v.upper() in compat_manual]
+            if candidates:
+                # choose best DI among those
+                scored = [(w, distortion_index(assemble_word(w).as_tuple(), intent.verb_target)) for w in candidates]
+                scored.sort(key=lambda x: x[1])
+                best_verb = (scored[0][0], scored[0][1])
     except Exception:
         pass
 

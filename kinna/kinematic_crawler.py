@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS words (
     word        TEXT    NOT NULL,
     synset_id   TEXT    NOT NULL,
     definition  TEXT,
+    examples    TEXT,
     vec_structure REAL NOT NULL,
     vec_force     REAL NOT NULL,
     vec_flow      REAL NOT NULL,
@@ -44,6 +45,17 @@ def init_db(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(str(path))
     conn.executescript(SCHEMA)
+    # Ensure `examples` column exists for older DBs
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(words)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "examples" not in cols:
+        try:
+            cur.execute("ALTER TABLE words ADD COLUMN examples TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            # ignore if cannot alter
+            pass
     conn.commit()
     return conn
 
@@ -84,6 +96,7 @@ def crawl_wordnet(
 
     for i, synset in enumerate(synsets):
         definition = synset.definition()
+        examples = "; ".join(synset.examples())
         synset_id = synset.name()
 
         for lemma in synset.lemmas():
@@ -97,13 +110,14 @@ def crawl_wordnet(
             try:
                 cursor.execute(
                     "INSERT OR IGNORE INTO words "
-                    "(word, synset_id, definition, vec_structure, vec_force, "
+                    "(word, synset_id, definition, examples, vec_structure, vec_force, "
                     "vec_flow, density, regime_tags) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         word.upper(),
                         synset_id,
                         definition,
+                        examples,
                         wv.structure,
                         wv.force,
                         wv.flow,

@@ -80,9 +80,29 @@ def apply_tense(word: str, tense: Tense) -> TensedVector:
     wv = assemble_word(base_word)
     base_vec = wv.as_tuple()
 
+    # Irregular past forms
+    IRREGULAR_PAST = {
+        "HOLD": "HELD",
+        "SIT": "SAT",
+        "SWIM": "SWAM",
+        "RING": "RANG",
+        "SING": "SANG",
+        "GO": "WENT",
+        "BE": "WAS",
+        "HAS": "HAD",
+        "HAVE": "HAD",
+        "DO": "DID",
+        "MAKE": "MADE",
+        "TAKE": "TOOK",
+        "RUN": "RAN",
+        "SPRING": "SPRANG",
+        "BREAK": "BROKE",
+        "RISE": "ROSE",
+    }
+
     if tense == Tense.PAST:
         vec = _apply_blend(base_vec, ED_BLEND)
-        display = base_word + "ED"
+        display = IRREGULAR_PAST.get(base_word, base_word + "ED")
     elif tense == Tense.ACTIVE:
         vec = _apply_blend(base_vec, ING_BLEND)
         display = base_word + "ING"
