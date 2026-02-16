@@ -5,6 +5,8 @@ __pycache__/
 dist/
 /build/
 *.db
+.# allow kinematic.db to be tracked
+!kinematic.db
 .pytest_cache/
 
 # Next.js
