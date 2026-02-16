@@ -163,8 +163,14 @@ def _shares_anchor(a: str, b: str, min_anchor: int = 4) -> bool:
         return False
     a_low = a.lower()
     b_low = b.lower()
-    # direct containment is the strongest signal
+    # direct containment is the strongest signal; but ignore simple
+    # nominalizing suffix cases (e.g. 'related' vs 'relatedness') which
+    # are not reliable negation anchors.
     if a_low in b_low or b_low in a_low:
+        longer, shorter = (b_low, a_low) if len(b_low) > len(a_low) else (a_low, b_low)
+        suffix = longer[len(shorter):]
+        if suffix in ("ness", "nesses"):
+            return False
         return True
     # sliding-window anchor check
     anchor_len = min_anchor
