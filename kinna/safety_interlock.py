@@ -126,7 +126,13 @@ def check_sentence(
 
     Skips common function words (articles, prepositions, pronouns).
     Returns a list of InterlockResults.
+
+    Additional safety: when a negation pair ("UN-"/"NON-") is present
+    in a safety-critical regime the pair is treated as a geometric
+    conflict (DI forced to 1.0) so downstream components can red-line it.
     """
+    from .regime_locker import is_negation_pair, is_safety_critical
+
     FUNCTION_WORDS = {
         "THE", "A", "AN", "TO", "AT", "IN", "ON", "OF", "BY", "FOR",
         "UP", "IT", "IS", "AS", "OR", "IF", "SO", "NO", "DO",
@@ -137,12 +143,45 @@ def check_sentence(
         "CAN", "COULD", "MAY", "MIGHT", "MUST",
     }
 
-    results = []
+    results: List[InterlockResult] = []
+    content_words: List[str] = []
+
+    # Collect content words and their baseline checks
     for w in words:
         clean = "".join(ch for ch in w if ch.isalpha()).upper()
         if not clean or clean in FUNCTION_WORDS:
             continue
+        content_words.append(clean)
         results.append(check_word(clean, regime, target_vector))
+
+    # Post-process: detect negation pairs in safety-critical regimes and force
+    # DI -> 1.0 (CONFLICT) for the offending pair so the UI/engine can flag it.
+    if is_safety_critical(regime) and len(results) > 1:
+        n = len(results)
+        for i in range(n):
+            for j in range(i + 1, n):
+                wa = results[i].word
+                wb = results[j].word
+                if is_negation_pair(wa, wb):
+                    # Replace both InterlockResults with conflict overrides
+                    conflict_i = InterlockResult(
+                        word=results[i].word,
+                        regime=regime,
+                        di=1.0,
+                        verdict=DIVerdict.CONFLICT,
+                        passed=False,
+                        suggestion=None,
+                    )
+                    conflict_j = InterlockResult(
+                        word=results[j].word,
+                        regime=regime,
+                        di=1.0,
+                        verdict=DIVerdict.CONFLICT,
+                        passed=False,
+                        suggestion=None,
+                    )
+                    results[i] = conflict_i
+                    results[j] = conflict_j
 
     return results
 
