@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from .assembler import WordVector, assemble_word
 from .di_calculator import distortion_index
 from .tense_modifier import Tense, apply_tense
+from .cluster_tagger import tag_regimes
 
 
 # ---------------------------------------------------------------------------
@@ -143,15 +144,32 @@ class SentencePlan:
         tv = apply_tense(self.verb, self.tense)
         verb_form = tv.word
 
+        def _conjugate_3sg(v: str) -> str:
+            u = v.lower()
+            if u.endswith(('s', 'sh', 'ch', 'x', 'z')):
+                return u + 'es'
+            if len(u) > 1 and u.endswith('y') and u[-2] not in 'aeiou':
+                return u[:-1] + 'ies'
+            return u + 's'
+
+        # Simple grammar: for BASE tense, render third-person singular form
+        if self.tense == Tense.BASE:
+            verb_render = _conjugate_3sg(verb_form)
+        elif self.tense == Tense.FUTURE:
+            verb_render = 'will ' + verb_form.lower()
+        else:
+            verb_render = verb_form.lower()
+
         parts = []
         if self.article:
             parts.append(self.article)
-        parts.append(self.noun)
-        parts.append(verb_form)
+        parts.append(self.noun.lower())
+        parts.append(verb_render)
 
         # Capitalize first word, period at end
         sentence = " ".join(parts)
-        return sentence[0].upper() + sentence[1:].lower() + "."
+        # Capitalize first character, leave proper casing for verbs/articles as set
+        return sentence[0].upper() + sentence[1:] + "."
 
     def __repr__(self) -> str:
         return (
@@ -185,10 +203,59 @@ def build_sentence(
     verb_pool = verbs or BUILTIN_VERBS
     noun_pool = nouns or BUILTIN_NOUNS
 
-    best_verb = find_best_word(verb_pool, intent.verb_target, top_n=1)[0]
-    best_noun = find_best_word(noun_pool, intent.noun_target, top_n=1)[0]
+    # Try to choose noun/verb pairs that share regime tags for semantic coherence.
+    # Collect top candidates and prefer pairs with overlapping tags.
+    top_k = 8
+    verb_candidates = find_best_word(verb_pool, intent.verb_target, top_n=top_k)
+    noun_candidates = find_best_word(noun_pool, intent.noun_target, top_n=top_k)
 
-    article = "THE" if use_article else ""
+    best_pair = None
+    best_score = float('inf')
+    for v_word, v_di in verb_candidates:
+        v_tags = set(tag_regimes(assemble_word(v_word)))
+        for n_word, n_di in noun_candidates:
+            n_tags = set(tag_regimes(assemble_word(n_word)))
+            if v_tags & n_tags:
+                score = v_di + n_di
+                if score < best_score:
+                    best_score = score
+                    best_pair = (v_word, v_di, n_word, n_di)
+
+    if best_pair:
+        best_verb = (best_pair[0], best_pair[1])
+        best_noun = (best_pair[2], best_pair[3])
+    else:
+        # If no shared-tag pair found, try targeted tag filtering based on intent
+        req_noun_tag = None
+        req_verb_tag = None
+        if intent.noun_target[0] > 0.65:
+            req_noun_tag = "HIGH_STRUCTURE"
+        if intent.noun_target[2] > 0.65:
+            req_noun_tag = "HIGH_FLOW"
+        if intent.verb_target[1] > 0.60:
+            req_verb_tag = "HIGH_FORCE"
+
+        filtered_pairs = []
+        for v_word, v_di in verb_candidates:
+            v_tags = set(tag_regimes(assemble_word(v_word)))
+            if req_verb_tag and req_verb_tag not in v_tags:
+                continue
+            for n_word, n_di in noun_candidates:
+                n_tags = set(tag_regimes(assemble_word(n_word)))
+                if req_noun_tag and req_noun_tag not in n_tags:
+                    continue
+                filtered_pairs.append((v_word, v_di, n_word, n_di))
+
+        if filtered_pairs:
+            # pick best by summed DI
+            best = min(filtered_pairs, key=lambda p: p[1] + p[3])
+            best_verb = (best[0], best[1])
+            best_noun = (best[2], best[3])
+        else:
+            best_verb = find_best_word(verb_pool, intent.verb_target, top_n=1)[0]
+            best_noun = find_best_word(noun_pool, intent.noun_target, top_n=1)[0]
+
+    article = "The" if use_article else ""
 
     return SentencePlan(
         intent=intent_name,
