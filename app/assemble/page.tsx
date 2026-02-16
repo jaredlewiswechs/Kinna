@@ -11,6 +11,8 @@ export default function AssemblePage() {
   const [results, setResults] = useState<
     { vector: WordVector; tags: string[] }[]
   >([]);
+  const [dbResults, setDbResults] = useState<any[]>([]);
+  const [dbLoading, setDbLoading] = useState(false);
   const [selectedGlyphIndex, setSelectedGlyphIndex] = useState<{
     wordIdx: number;
     glyphIdx: number;
@@ -31,6 +33,30 @@ export default function AssemblePage() {
     });
     setResults(newResults);
     setSelectedGlyphIndex(null);
+  }
+
+  async function fetchDB() {
+    const words = input
+      .trim()
+      .split(/[,\s]+/)
+      .filter(Boolean);
+    if (words.length === 0) return;
+    const q = words[0];
+    setDbLoading(true);
+    try {
+      const res = await fetch(`/api/words?q=${encodeURIComponent(q)}&limit=12`);
+      if (res.ok) {
+        const data = await res.json();
+        setDbResults(data);
+      } else {
+        setDbResults([]);
+      }
+    } catch (err) {
+      console.error(err);
+      setDbResults([]);
+    } finally {
+      setDbLoading(false);
+    }
   }
 
   const selectedGlyph =
@@ -58,6 +84,14 @@ export default function AssemblePage() {
           className="input-field flex-1"
           autoFocus
         />
+        <button
+          type="button"
+          className="btn"
+          onClick={fetchDB}
+          disabled={dbLoading}
+        >
+          {dbLoading ? 'Searching DB...' : 'Search DB'}
+        </button>
         <button type="submit" className="btn-primary shrink-0">
           Assemble
         </button>
@@ -148,6 +182,28 @@ export default function AssemblePage() {
               >
                 {w}
               </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dbResults.length > 0 && (
+        <div className="card p-4 mt-6">
+          <p className="section-header">Database Results</p>
+          <div className="flex flex-col gap-3 mt-3">
+            {dbResults.map((r, i) => (
+              <div key={i} className="border rounded p-3">
+                <div className="flex items-baseline justify-between">
+                  <strong className="text-[14px]">{r.word}</strong>
+                  <span className="text-[12px] text-label-quaternary">{r.synset_id}</span>
+                </div>
+                <div className="text-[13px] text-label-secondary mt-1">
+                  {r.definition}
+                </div>
+                <div className="text-[12px] text-label-quaternary mt-2">
+                  density: {r.density?.toFixed(3)} — tags: {r.regime_tags}
+                </div>
+              </div>
             ))}
           </div>
         </div>
