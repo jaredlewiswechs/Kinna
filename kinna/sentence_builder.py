@@ -24,6 +24,8 @@ from .assembler import WordVector, assemble_word
 from .di_calculator import distortion_index
 from .tense_modifier import Tense, apply_tense
 from .cluster_tagger import tag_regimes
+import sqlite3
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +256,44 @@ def build_sentence(
         else:
             best_verb = find_best_word(verb_pool, intent.verb_target, top_n=1)[0]
             best_noun = find_best_word(noun_pool, intent.noun_target, top_n=1)[0]
+
+    # Use WordNet DB to prefer verbs that co-occur with the chosen noun
+    def _compatible_verbs_from_db(chosen_noun: str, verbs_list: List[str]) -> List[str]:
+        db_path = Path(__file__).resolve().parent.parent / "kinematic.db"
+        if not db_path.exists():
+            return []
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT definition FROM words WHERE word = ? AND synset_id LIKE '%.n.%'",
+                (chosen_noun.upper(),),
+            )
+            defs = " ".join((r[0] or "") for r in cur.fetchall()).lower()
+            conn.close()
+        except Exception:
+            return []
+
+        if not defs:
+            return []
+
+        compatible = [v for v in verbs_list if v.lower() in defs]
+        return compatible
+
+    # If the noun is from DB, try to find compatible verbs and prefer them
+    try:
+        noun_word = best_noun[0]
+        compat = _compatible_verbs_from_db(noun_word, verb_pool)
+        if compat:
+            # choose the compatible verb with lowest DI
+            scored = [(w, distortion_index(assemble_word(w).as_tuple(), intent.verb_target)) for w in compat]
+            scored.sort(key=lambda x: x[1])
+            chosen_v = scored[0][0]
+            # update best_verb if different
+            if chosen_v != best_verb[0]:
+                best_verb = (chosen_v, scored[0][1])
+    except Exception:
+        pass
 
     article = "The" if use_article else ""
 
