@@ -6,3 +6,10 @@ dist/
 build/
 *.db
 .pytest_cache/
+
+# Next.js
+.next/
+out/
+node_modules/
+.env*.local
+next-env.d.ts
